@@ -111,7 +111,7 @@ class OpenIDConnectClient
      */
     public function authenticate() {
 
-        $code = $_REQUEST["code"];
+        $code = @$_REQUEST["code"];
 
         // If we have an authorization code then proceed to request a token
         if ($code) {
@@ -120,7 +120,7 @@ class OpenIDConnectClient
 
             // Throw an error if the server returns one
             if (isset($token_json->error)) {
-                throw new OpenIDConnectClientException($token_json->error_description);
+                throw new OpenIDConnectClientException($token_json->error);
             }
 
             // Do an OpenID Connect session check
@@ -172,7 +172,7 @@ class OpenIDConnectClient
         // If the configuration value is not available, attempt to fetch it from a well known config endpoint
         // This is also known as auto "discovery"
         if (!isset($this->providerConfig[$param])) {
-            $well_known_config_url = self::getProviderURL() . ".well-known/openid-configuration";
+            $well_known_config_url = self::getProviderURL() . "/.well-known/openid-configuration";
             $value = json_decode(self::fetchURL($well_known_config_url))->{$param};
 
             if ($value) {
@@ -202,7 +202,13 @@ class OpenIDConnectClient
             $base_page_url .= $_SERVER["SERVER_NAME"];
         }
 
-        $base_page_url .= reset(explode("?", $_SERVER['REQUEST_URI']));
+        if (!isset($this->providerConfig['request_uri'])) {
+	        $base_page_url .= reset(explode("?", $_SERVER['REQUEST_URI']));
+        } else {
+            $base_page_url = $this->providerConfig['request_uri'];
+            $base_page_url = explode("?", $base_page_url);
+            $base_page_url = $base_page_url[0];
+        }
 
         // encode the URL so we can pass it back as a parameter
         return urlencode($base_page_url);
@@ -241,7 +247,7 @@ class OpenIDConnectClient
         $auth_endpoint .= "?response_type=" . $response_type
             . "&client_id=" . $this->clientID
             . "&redirect_uri=" . self::getRedirectURL()
-            . "&nonce=" . $nonce
+        //  . "&nonce=" . $nonce
             . "&state=" . $state;
 
         // If the client has been registered with additional scopes
@@ -262,9 +268,7 @@ class OpenIDConnectClient
      */
     private function requestTokens($code) {
 
-
         $token_endpoint = self::getConfigValue("token_endpoint");
-
         $grant_type = "authorization_code";
 
         $token_endpoint .= "?grant_type=" . $grant_type
@@ -273,7 +277,7 @@ class OpenIDConnectClient
             . "&client_id=" . $this->clientID
             . "&client_secret=" . $this->clientSecret;
 
-        return json_decode(self::fetchURL($token_endpoint));
+        return json_decode(self::fetchURL($token_endpoint, "POST"));
 
     }
 
@@ -282,10 +286,9 @@ class OpenIDConnectClient
      * @return bool
      */
     private function verifyJWTclaims($claims) {
-
         return (($claims->iss == self::getProviderURL())
-            && ($claims->aud == $this->clientID)
-            && ($claims->nonce == $_SESSION['openid_connect_nonce']));
+            && ($claims->aud == $this->clientID));
+        //  && ($claims->nonce == $_SESSION['openid_connect_nonce']));
 
     }
 
@@ -358,8 +361,7 @@ class OpenIDConnectClient
      * @throws OpenIDConnectClientException
      * @return mixed
      */
-    private function fetchURL($url) {
-
+    private function fetchURL($url, $method = "GET") {
 
         // OK cool - then let's create a new cURL resource handle
         $ch = curl_init();
@@ -367,7 +369,16 @@ class OpenIDConnectClient
         // Now set some options (most are optional)
 
         // Set URL to download
-        curl_setopt($ch, CURLOPT_URL, $url);
+ 		if ($method=="POST"){
+			$url_parts = explode("?", $url);
+			$query_parts = explode("&", $url_parts[1]);
+			curl_setopt($ch,CURLOPT_URL, $url_parts[0]);
+			curl_setopt($ch,CURLOPT_POST, count($query_parts));
+			curl_setopt($ch,CURLOPT_POSTFIELDS, $url_parts[1]);
+		} else {
+	       curl_setopt($ch, CURLOPT_URL, $url);
+		}
+
 
         if (isset($this->httpProxy)) {
             curl_setopt($ch, CURLOPT_PROXY, $this->httpProxy);
@@ -388,6 +399,9 @@ class OpenIDConnectClient
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
             curl_setopt($ch, CURLOPT_CAINFO, $this->certPath);
+            curl_setopt($ch, CURLOPT_CAPATH, NULL);
+        } else {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
         }
 
         // Should cURL return or print out the data? (true = return, false = print)
@@ -419,7 +433,7 @@ class OpenIDConnectClient
         if (!isset($this->providerConfig['issuer'])) {
             throw new OpenIDConnectClientException("The provider URL has not been set");
         } else {
-            return rtrim($this->providerConfig['issuer'], '/') . '/';
+            return rtrim($this->providerConfig['issuer'], '/');
         }
     }
 
